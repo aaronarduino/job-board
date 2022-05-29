@@ -46,11 +46,17 @@ func NewServer(c config.Config, db *sqlx.DB) (http.Server, error) {
 	router.POST("/jobs", ctrl.CreateJob)
 	router.GET("/jobs/:id", ctrl.ViewJob)
 
-	authorized := router.Group("/")
-	authorized.Use(requireAuth(db, c.AppSecret))
+	authorizedJobs := router.Group("/jobs")
+	authorizedJobs.Use(requireAuthJobs(db, c.AppSecret))
 	{
-		authorized.GET("/jobs/:id/edit", ctrl.EditJob)
-		authorized.POST("/jobs/:id", ctrl.UpdateJob)
+		authorizedJobs.GET("/:id/edit", ctrl.EditJob)
+		authorizedJobs.POST("/:id", ctrl.UpdateJob)
+	}
+
+	authorizedUsers := router.Group("/users")
+	authorizedUsers.Use(requireAuthUsers(db, c.AppSecret))
+	{
+		authorizedUsers.GET("/:id/verify", ctrl.VerifyEmail)
 	}
 
 	return http.Server{
@@ -75,7 +81,7 @@ func renderer() multitemplate.Renderer {
 	return r
 }
 
-func requireAuth(db *sqlx.DB, secret string) func(*gin.Context) {
+func requireAuthJobs(db *sqlx.DB, secret string) func(*gin.Context) {
 	return func(ctx *gin.Context) {
 		jobID := ctx.Param("id")
 		job, err := data.GetJob(jobID, db)
@@ -86,7 +92,27 @@ func requireAuth(db *sqlx.DB, secret string) func(*gin.Context) {
 		}
 
 		token := ctx.Query("token")
-		expected := signatureForJob(job, secret)
+		expected := signatureForItem(data.DataModel(&job), secret)
+
+		if token != expected {
+			ctx.AbortWithStatus(403)
+			return
+		}
+	}
+}
+
+func requireAuthUsers(db *sqlx.DB, secret string) func(*gin.Context) {
+	return func(ctx *gin.Context) {
+		userID := ctx.Param("id")
+		user, err := data.GetUser(userID, db)
+		if err != nil {
+			log.Println(fmt.Errorf("requireAuth failed to GetUser: %w", err))
+			ctx.AbortWithStatus(http.StatusInternalServerError)
+			return
+		}
+
+		token := ctx.Query("token")
+		expected := signatureForItem(data.DataModel(&user), secret)
 
 		if token != expected {
 			ctx.AbortWithStatus(403)

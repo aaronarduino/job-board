@@ -94,6 +94,17 @@ func (ctrl *Controller) CreateJob(ctx *gin.Context) {
 		return
 	}
 
+	// Create new user if they don't exist already in db
+	newUser := data.NewUser(newJobInput.Email)
+	log.Printf("New User Data: email = %v", newUser.Email)
+	err := newUser.SaveToDB(ctrl.DB)
+	if err != nil {
+		log.Println(fmt.Errorf("failed to save new user to db: %w", err))
+		session.AddFlash("Error creating new user")
+		ctx.Redirect(302, "/new")
+		return
+	}
+
 	job, err := newJobInput.SaveToDB(ctrl.DB)
 	if err != nil {
 		log.Println(fmt.Errorf("failed to save job to db: %w", err))
@@ -103,29 +114,31 @@ func (ctrl *Controller) CreateJob(ctx *gin.Context) {
 	}
 
 	if ctrl.Config.Email.SMTPHost != "" {
-		// TODO: make this a nicer html template?
+		// TODO: make these html templates nicer?
 		message := fmt.Sprintf(
 			"Your job has been created!\n\n<a href=\"%s\">Use this link to edit the job posting</a>",
-			signedJobRoute(job, ctrl.Config),
+			signedRoute("jobs", "edit", data.DataModel(&job), ctrl.Config),
 		)
 		err = services.SendEmail(newJobInput.Email, "Job Created!", message, ctrl.Config.Email)
 		if err != nil {
 			log.Println(fmt.Errorf("failed to sendEmail: %w", err))
 			// continuing...
 		}
-	}
 
-	if ctrl.Config.SlackHook != "" {
-		if err = services.PostToSlack(job, ctrl.Config); err != nil {
-			log.Println(fmt.Errorf("failed to postToSlack: %w", err))
-			// continuing...
-		}
-	}
-
-	if ctrl.Config.Twitter.AccessToken != "" {
-		if err = services.PostToTwitter(job, ctrl.Config); err != nil {
-			log.Println(fmt.Errorf("failed to postToTwitter: %w", err))
-			// continuing...
+		// If needed send email to verify email address
+		user, err := data.GetUserByEmail(job.Email, ctrl.DB)
+		if err == nil && !user.Verified {
+			message := fmt.Sprintf(
+				"Your email address has not been verified.\n\n<a href=\"%s\">Use this link to verify your email.</a>",
+				signedRoute("users", "verify", data.DataModel(&user), ctrl.Config),
+			)
+			err = services.SendEmail(newJobInput.Email, "Verify email", message, ctrl.Config.Email)
+			if err != nil {
+				log.Println(fmt.Errorf("failed to sendEmail: %v", err))
+				// continuing...
+			}
+		} else {
+			log.Println(fmt.Errorf("failed to send user verification email: %v", err))
 		}
 	}
 
@@ -195,6 +208,33 @@ func (ctrl *Controller) ViewJob(ctx *gin.Context) {
 	}
 
 	ctx.HTML(200, "view", gin.H{"job": job, "description": template.HTML(description)})
+}
+
+func (ctrl *Controller) VerifyEmail(ctx *gin.Context) {
+	session := sessions.Default(ctx)
+	id := ctx.Param("id")
+	user, err := data.GetUser(id, ctrl.DB)
+	if err != nil {
+		log.Println(fmt.Errorf("failed to getUser: %w", err))
+		ctx.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+
+	if user.Verified {
+		session.AddFlash("Email verified!")
+		ctx.Redirect(302, "/")
+		return
+	}
+
+	_, err = user.UpdateUserVerification(user.ID, true, ctrl.DB)
+	if err != nil {
+		session.AddFlash("Could not verify email!")
+		ctx.Redirect(302, "/")
+		return
+	}
+
+	session.AddFlash("Email verified!")
+	ctx.Redirect(302, "/")
 }
 
 func addFlash(ctx *gin.Context, base gin.H) gin.H {

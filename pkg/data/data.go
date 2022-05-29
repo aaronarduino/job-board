@@ -2,7 +2,9 @@ package data
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/mail"
@@ -14,14 +16,24 @@ import (
 	"github.com/yuin/goldmark/extension"
 )
 
+type DataModel interface {
+	ItemID() string
+	Hash(secret string) string
+}
+
 type Job struct {
-	ID           string         `db:"id"`
-	Position     string         `db:"position"`
-	Organization string         `db:"organization"`
-	Url          sql.NullString `db:"url"`
-	Description  sql.NullString `db:"description"`
-	Email        string         `db:"email"`
-	PublishedAt  time.Time      `db:"published_at"`
+	ID                 string         `db:"id"`
+	Position           string         `db:"position"`
+	Organization       string         `db:"organization"`
+	Url                sql.NullString `db:"url"`
+	Description        sql.NullString `db:"description"`
+	Email              string         `db:"email"`
+	PublishedAt        time.Time      `db:"published_at"`
+	PublishedToSocials bool           `db:"published_to_socials"`
+}
+
+func (job *Job) ItemID() string {
+	return job.ID
 }
 
 func (job *Job) Update(newParams NewJob) {
@@ -59,10 +71,25 @@ func (job *Job) RenderDescription() (string, error) {
 	return b.String(), nil
 }
 
+func (job *Job) Hash(secret string) string {
+	input := fmt.Sprintf(
+		"%s:%s:%s:%s",
+		job.ID,
+		job.Email,
+		job.PublishedAt.String(),
+		secret,
+	)
+
+	hash := sha1.New()
+	hash.Write([]byte(input))
+
+	return string(base64.URLEncoding.EncodeToString(hash.Sum(nil)))
+}
+
 func (job *Job) Save(db *sqlx.DB) (sql.Result, error) {
 	return db.Exec(
-		"UPDATE jobs SET position = $1, organization = $2, url = $3, description = $4 WHERE id = $5",
-		job.Position, job.Organization, job.Url, job.Description, job.ID,
+		"UPDATE jobs SET position = $1, organization = $2, url = $3, description = $4, published_to_socials = $5 WHERE id = $6",
+		job.Position, job.Organization, job.Url, job.Description, job.PublishedToSocials, job.ID,
 	)
 }
 
@@ -86,6 +113,23 @@ func GetJob(id string, db *sqlx.DB) (Job, error) {
 	}
 
 	return job, nil
+}
+
+func GetJobsToPostOnSocials(db *sqlx.DB) ([]Job, error) {
+	var jobs []Job
+
+	// TODO: Need to only return jobs with verified emails
+	err := db.Select(&jobs, "SELECT jobs.* FROM jobs FULL JOIN users ON jobs.email = users.email WHERE jobs.published_to_socials = false AND users.verified = true ORDER BY jobs.published_at DESC")
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+
+	return jobs, nil
+}
+
+func (job *Job) SetPublishedToSocials(value bool, db *sqlx.DB) {
+	job.PublishedToSocials = value
+	job.Save(db)
 }
 
 type NewJob struct {
@@ -133,8 +177,8 @@ func (newJob *NewJob) Validate(update bool) map[string]string {
 
 func (newJob *NewJob) SaveToDB(db *sqlx.DB) (Job, error) {
 	query := `INSERT INTO jobs
-    (position, organization, url, description, email)
-    VALUES ($1, $2, $3, $4, $5)
+    (position, organization, url, description, email, published_to_socials)
+    VALUES ($1, $2, $3, $4, $5, $6)
     RETURNING *`
 
 	params := []interface{}{
@@ -149,6 +193,7 @@ func (newJob *NewJob) SaveToDB(db *sqlx.DB) (Job, error) {
 			Valid:  newJob.Description != "",
 		},
 		newJob.Email,
+		false,
 	}
 
 	var job Job

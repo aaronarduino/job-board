@@ -8,11 +8,11 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/devict/job-board/pkg/config"
 	"github.com/devict/job-board/pkg/data"
 	"github.com/devict/job-board/pkg/server"
+	"github.com/devict/job-board/pkg/tasks"
 
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
@@ -54,28 +54,8 @@ func run() error {
 
 	wg := sync.WaitGroup{}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		ticker := time.NewTicker(time.Hour)
-		defer ticker.Stop()
-
-		for {
-			log.Println("removing old jobs")
-			_, err := db.Exec("DELETE FROM jobs WHERE published_at < NOW() - INTERVAL '30 DAYS'")
-			if err != nil {
-				log.Println(fmt.Errorf("error clearing old jobs: %w", err))
-			}
-
-			select {
-			case <-ctx.Done():
-				log.Println("shutting down old jobs background process")
-				return
-			case <-ticker.C:
-				continue
-			}
-		}
-	}()
+	tr := tasks.NewTaskRunner(ctx, db, c)
+	tr.StartBackgroundTasks(wg)
 
 	server, err := server.NewServer(c, db)
 	if err != nil {
