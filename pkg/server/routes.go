@@ -23,7 +23,7 @@ type Controller struct {
 }
 
 func (ctrl *Controller) Index(ctx *gin.Context) {
-	jobs, err := data.GetAllJobs(ctrl.DB)
+	jobs, err := data.GetAllPublishedJobs(ctrl.DB)
 	if err != nil {
 		log.Println(fmt.Errorf("Index failed to getAllJobs: %w", err))
 		ctx.AbortWithStatus(http.StatusInternalServerError)
@@ -123,7 +123,7 @@ func (ctrl *Controller) CreateJob(ctx *gin.Context) {
 
 	if ctrl.EmailService != nil {
 		// TODO: make this a nicer html template?
-		subject := fmt.Sprintf("Job %s Created!", newJobInput.Position)
+		subject := fmt.Sprintf("Job %s Created(draft)!", newJobInput.Position)
 		message := fmt.Sprintf(`
 			<!doctype html>
 			<html>
@@ -144,9 +144,10 @@ func (ctrl *Controller) CreateJob(ctx *gin.Context) {
 			<body>
 				<div class="container">
 					<h1>Job %s Created!</h1>
-					<p>Congratulations! Your job posting for the position <strong>%s</strong> has been successfully created.</p>
-					<p>You can edit or update your job posting by clicking the link below:</p>
+					<p>Congratulations! Your draft job posting for the position <strong>%s</strong> has been successfully created.</p>
+					<p>You can edit your job posting and publish it by clicking the link below:</p>
 					<p><a href="%s">Edit Job Posting</a></p>
+					<p><i>Note: Your job posting will not be live until you click <b>Publish.</b></i></p>
 					<div class="footer">
 						<p>&copy; <a href="https://jobs.devict.org/">Job Board</a></p>
 					</div>
@@ -176,7 +177,7 @@ func (ctrl *Controller) CreateJob(ctx *gin.Context) {
 		}
 	}
 
-	session.AddFlash("Job created!")
+	session.AddFlash("Job created in draft status! Check email to publish.")
 	ctx.Redirect(302, "/")
 }
 
@@ -275,7 +276,6 @@ func (ctrl *Controller) DeleteJob(ctx *gin.Context) {
 
 	ctx.Redirect(http.StatusFound, "/")
 }
-
 
 func addFlash(ctx *gin.Context, base gin.H) gin.H {
 	session := sessions.Default(ctx)

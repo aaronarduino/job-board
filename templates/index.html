@@ -9,9 +9,11 @@
             href="/jobs/{{ .ID }}"
             class="relative z-10 text-gray-500 hover:underline focus:underline"
             >
-            <time datetime="{{ .PublishedAt | formatAsRfc3339String }}" class="text-sm">
-              Posted {{ .PublishedAt | formatAsDate }}
-            </time>
+            {{ if .PublishedAt.Valid }}
+                <time datetime="{{ .PublishedAt.Time | formatAsRfc3339String }}" class="text-sm">
+                Posted {{ .PublishedAt.Time | formatAsDate }}
+                </time>
+            {{end}}
         </a>
       </div>
       {{ if .Url.Valid }}

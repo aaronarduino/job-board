@@ -26,7 +26,9 @@ type Job struct {
 	Description     sql.NullString `db:"description" json:"-"`
 	DescriptionJSON *string        `db:"-" json:"description"`
 	Email           string         `db:"email" json:"email"`
-	PublishedAt     time.Time      `db:"published_at" json:"published_at"`
+	Published       bool           `db:"published" json:"published"`
+	PublishedAt     sql.NullTime   `db:"published_at" json:"published_at"`
+	CreatedAt       time.Time      `db:"created_at" json:"created_at"`
 }
 
 const (
@@ -47,6 +49,10 @@ func (job *Job) Update(newParams NewJob) {
 
 	job.Description.String = newParams.Description
 	job.Description.Valid = newParams.Description != ""
+
+	// Mark job posting as valid and publish
+	job.Published = true
+	job.PublishedAt.Time = time.Now()
 }
 
 func (job *Job) RenderDescription() (string, error) {
@@ -75,8 +81,8 @@ func (job *Job) RenderDescription() (string, error) {
 
 func (job *Job) Save(db *sqlx.DB) (sql.Result, error) {
 	return db.Exec(
-		"UPDATE jobs SET position = $1, organization = $2, url = $3, description = $4 WHERE id = $5",
-		job.Position, job.Organization, job.Url, job.Description, job.ID,
+		"UPDATE jobs SET position = $1, organization = $2, url = $3, description = $4, published = $5, published_at = $6 WHERE id = $7",
+		job.Position, job.Organization, job.Url, job.Description, job.Published, job.PublishedAt, job.ID,
 	)
 }
 
@@ -85,7 +91,7 @@ func (job *Job) AuthSignature(secret string) string {
 		"%s:%s:%s",
 		job.ID,
 		job.Email,
-		job.PublishedAt.String(),
+		job.CreatedAt.String(),
 	)
 
 	hash := hmac.New(sha256.New, []byte(secret))
@@ -98,6 +104,26 @@ func GetAllJobs(db *sqlx.DB) ([]Job, error) {
 	var jobs []Job
 
 	err := db.Select(&jobs, "SELECT * FROM jobs ORDER BY published_at DESC")
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return jobs, err
+	}
+
+	for i := range jobs {
+		if !jobs[i].Url.Valid {
+			jobs[i].JSONUrl = &jobs[i].Url.String
+		}
+		if !jobs[i].Description.Valid {
+			jobs[i].DescriptionJSON = &jobs[i].Description.String
+		}
+	}
+
+	return jobs, nil
+}
+
+func GetAllPublishedJobs(db *sqlx.DB) ([]Job, error) {
+	var jobs []Job
+
+	err := db.Select(&jobs, "SELECT * FROM jobs WHERE published = true ORDER BY published_at DESC")
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return jobs, err
 	}
@@ -132,19 +158,19 @@ func GetJob(id string, db *sqlx.DB) (Job, error) {
 	return job, nil
 }
 
-func DeleteJob(id string, db *sqlx.DB) (error) {
-  result, err := db.Exec("DELETE FROM jobs WHERE id = $1", id)
-  if err != nil {
-    return err
-  }
-  rowsAffected, err := result.RowsAffected()
-  if err != nil {
-    return err
-  }
-  if rowsAffected != 1 {
-    return fmt.Errorf("failed to delete job: %w", err)
-  }
-  return nil
+func DeleteJob(id string, db *sqlx.DB) error {
+	result, err := db.Exec("DELETE FROM jobs WHERE id = $1", id)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected != 1 {
+		return fmt.Errorf("failed to delete job: %w", err)
+	}
+	return nil
 }
 
 type NewJob struct {
